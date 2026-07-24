@@ -1,4 +1,4 @@
-# Vineyard WebApp Backend
+# Vineyard Backend
 
 La directory `backend/` contiene la soluzione backend per la simulazione del modello agrometeorologico (Problema 1 e Problema 2), sviluppata con Django e Django REST Framework.
 
