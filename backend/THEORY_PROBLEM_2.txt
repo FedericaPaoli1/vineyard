@@ -1,0 +1,48 @@
+SPIEGAZIONE TEORICA E APPLICATA - PROBLEMA 2
+
+1. Contesto e Soluzione Architetturale
+Il Problema 2 ha come scopo quello di ricostruire l'evoluzione nel tempo di una simulazione agrometeorologica basata su dati ibridi: un dato storico reale e molteplici dati previsionali futuri.
+La sfida teorica principale risiede nella mutabilità delle previsioni meteorologiche: se si esegue una chiamata in data T per prevedere lo stato del DOY T+3, si otterrà un valore calcolato. Eseguendo la chiamata in data T+1 per lo stesso DOY T+3, le previsioni meteo aggiornate potrebbero generare un valore differente.
+
+Per acquisire e ricostruire correttamente le sequenze temporali senza sovrascrivere o perdere i delta previsionali, l'API è stata progettata per salvare ogni stato in un database relazionale (PostgreSQL) utilizzando tre parametri fondamentali:
+  a) event_index: l'identificativo univoco dell'evento.
+  b) target_doy: il giorno dell'anno a cui si riferisce lo stato calcolato.
+  c) simulation_date: il timestamp esatto in cui l'API ha eseguito il calcolo.
+
+2. Ricostruzione delle Serie Temporali
+Grazie allo schema dati implementato, la ricostruzione temporale si traduce in query SQL, rispondendo alle due principali esigenze di analisi:
+
+A. Serie Storica:
+L'obiettivo è ricostruire la curva temporale reale di un evento (es. event_index = 1). Poiché per lo stesso 'target_doy' avremo più righe (le previsioni dei giorni precedenti + il ricalcolo finale con i dati reali), il dato consolidato corrisponde alla simulazione più recente per ciascun DOY.
+In PostgreSQL, questo si ottiene tramite la clausola DISTINCT ON:
+
+    SELECT DISTINCT ON (target_doy)
+       target_doy,
+       x_value,
+       simulation_date
+    FROM vineyard_model_eventhistory
+    WHERE event_index = 1
+    ORDER BY target_doy ASC, simulation_date DESC;
+
+B. Serie Previsionale Evolutiva:
+L'obiettivo qui è valutare come è cambiata la previsione per un singolo giorno specifico nel corso del tempo. Fissando un giorno futuro (es. target_doy = 278), estraiamo tutte le simulazioni effettuate nei giorni precedenti per vedere come la variabile X è evoluta:
+
+    SELECT
+       simulation_date,
+       x_value
+    FROM vineyard_model_eventhistory
+    WHERE event_index = 1
+     AND target_doy = 278
+    ORDER BY simulation_date ASC;
+
+3. Stime Algoritmiche (Notazione O-grande)
+Siano:
+    D = Numero di giorni processati nella singola richiesta Multi-DOY.
+    E = Numero di eventi attivi e processati in un dato giorno.
+
+- Complessità Temporale:
+L'algoritmo sviluppato itera in modo lineare sui D giorni. Per ciascun giorno, itera sugli E eventi attivi per applicare le logiche di evoluzione. Il calcolo in memoria richiede un tempo O(D * E).
+Il collo di bottiglia critico risiede nell'operazione di I/O verso il Database. Per evitare di eseguire D*E query sequenziali, le istanze ORM vengono accumulate in una lista Python e salvate in PostgreSQL tramite un'operazione di 'bulk_create' all'interno di una transazione atomica. Questo riduce i tempi di latenza del network, completando l'inserimento con una complessità temporale globale di O(D * E).
+
+- Complessità Spaziale:
+L'algoritmo mantiene in memoria la lista temporanea degli eventi per la costruzione del payload JSON di risposta e la lista dei record 'EventHistory' da inserire in bulk nel database. Entrambe le strutture dati crescono in modo direttamente proporzionale ai giorni e agli eventi processati, risultando in una complessità spaziale di O(D * E).
